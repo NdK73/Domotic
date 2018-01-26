@@ -1,0 +1,79 @@
+#######################################
+# Syntax Coloring Map For Domotic
+#######################################
+
+#######################################
+# Datatypes (KEYWORD1)
+#######################################
+
+Domotic	KEYWORD1
+DomError	KEYWORD1
+DomPktType	KEYWORD1
+DomUpdDir	KEYWORD1
+DomUpdType	KEYWORD1
+
+#######################################
+# Methods and Functions (KEYWORD2)
+#######################################
+
+begin	KEYWORD2
+handle	KEYWORD2
+setPort	KEYWORD2
+
+setMCast	KEYWORD2
+
+stop	KEYWORD2
+hex2uint8	KEYWORD2
+
+recvPkt	KEYWORD2
+handler	KEYWORD2
+processCommand	KEYWORD2
+processInfo	KEYWORD2
+processNotification	KEYWORD2
+processTimeUpdate	KEYWORD2
+writeDigitalOut	KEYWORD2
+writeAnalogOut	KEYWORD2
+writeRegister	KEYWORD2
+readDigitalOut	KEYWORD2
+readDigitalOut	KEYWORD2
+readAnalogOut	KEYWORD2
+readAnalogOut	KEYWORD2
+readDigitalIn	KEYWORD2
+readDigitalIn	KEYWORD2
+readAnalogIn	KEYWORD2
+readAnalogIn	KEYWORD2
+readAnalogOutSpec	KEYWORD2
+readAnalogInSpec	KEYWORD2
+readDigitalOutSpec	KEYWORD2
+readDigitalInSpec	KEYWORD2
+answer	KEYWORD2
+notify	KEYWORD2
+
+#######################################
+# Constants (LITERAL1)
+#######################################
+
+ERR_OK	LITERAL1
+ERR_CTX	LITERAL1
+ERR_CMD_BAD	LITERAL1
+ERR_CMD_UNS	LITERAL1
+ERR_CMD_RANGE	LITERAL1
+ERR_CMD_SIZE	LITERAL1
+ERR_INF_BAD	LITERAL1
+ERR_INF_RANGE	LITERAL1
+ERR_UNSUPP	LITERAL1
+ERR_UNKNOWN	LITERAL1
+
+PKT_ANS	LITERAL1
+PKT_CMD	LITERAL1
+PKT_ENC	LITERAL1
+PKT_INF	LITERAL1
+PKT_SIG	LITERAL1
+PKT_UPD	LITERAL1
+
+DIR_IN	LITERAL1
+DIR_OUT	LITERAL1
+
+TYPE_ANALOG	LITERAL1
+TYPE_DIGITAL	LITERAL1
+
