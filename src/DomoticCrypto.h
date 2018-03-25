@@ -11,6 +11,8 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "RNG.h"
+#include <crypto/Crypto.h>
+#include <crypto/Ed25519.h>
 
 // Base class for all the keyslots (key instances)
 // must be initialized by calling initialize()
@@ -29,7 +31,7 @@ class KeySlot {
 
     // Initialize actual key material
     // If blob is NULL, key is initialized from RNGClass (useful for asymmetric keys).
-    static KeySlot initialize(uint16_t id, const uint8_t *blob, const int blen)=0;
+    static KeySlot& initialize(uint16_t id, const uint8_t *blob, const int blen);
 
     // Return the cypher name
     virtual const char *getDescr() = 0;
