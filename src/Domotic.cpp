@@ -1,5 +1,11 @@
 #include "Domotic.h"
+#include <Wire.h>
 #include <WiFiUdp.h>
+
+#include "expansions/DomoNodeExpansion.h"
+#include "expansions/DomoNodeInout10.h"
+#include "expansions/DomoNodeInout11.h"
+#include "expansions/DomoNodeInputs.h"
 
 #define PROTOVERSION "0.1.0"
 
@@ -22,6 +28,9 @@ Domotic::Domotic()
 , _isSigned(false)
 , _signKey(0)
 {
+  for(uint8_t addr=0; addr<Domotic::MAX_EXPS; ++addr) {
+    _exps[addr]=NULL;
+  }
 }
 
 Domotic::~Domotic() {
@@ -30,12 +39,64 @@ Domotic::~Domotic() {
   delete _dinMap;
   delete _ainMap;
   delete _text;
+  for(uint8_t addr=0; addr<Domotic::MAX_EXPS; ++addr) {
+    delete _exps[addr];
+    _exps[addr]=NULL;
+  }
 }
 
 void Domotic::begin(void) {
   if(_initialized)
     return;
 
+  //Autodetect expansion boards & update in/out counter!
+  Wire.begin(); // Just to be sure
+  for(int i2c=0; i2c<Domotic::MAX_EXPS; ++i2c) {
+    uint8_t error;
+    uint8_t type=0, release=0;
+
+    Wire.beginTransmission(0x50+i2c);
+    if(Wire.endTransmission()) {	// EEPROM not found
+      // PCA9555 is at 0x20-0x27
+      Wire.beginTransmission(0x20+i2c);
+      if(!Wire.endTransmission()) { // Found PCA9555 in DomoNode-inout 1.0 (no EEPROM)
+        _exps[i2c]=DomoNodeInout10::getInstance(1, 0, i2c, NULL);
+      }
+    } else {
+      uint8_t header[4], cnt=0;
+      // EEPROM found, get board type and release
+      Wire.beginTransmission(0x50+i2c);
+      Wire.write(0);
+      Wire.endTransmission(false);
+      Wire.requestFrom((uint8_t)(0x50+i2c), sizeof(header), (bool)true);
+      while(Wire.available() && cnt<sizeof(header)) {
+        header[cnt++]=Wire.read();
+      }
+      // A proper factory pattern would only waste precious RAM
+      // Every class "knows" its keys
+      _exps[i2c]=DomoNodeInout11::getInstance(header[0], header[1], i2c, NULL);
+      if(!_exps[i2c])
+        _exps[i2c]=DomoNodeInputs::getInstance(header[0], header[1], i2c, NULL);
+      // just "cascade" other expansions: the first matching one will be saved
+      //if(!_exps[i2c])
+      //  _exps[i2c]=DomoNodeInputs::getInstance(header[0], header[1], i2c, NULL);
+    }
+    if(_exps[i2c]) {
+      _douts+=_exps[i2c]->douts();
+      _aouts+=_exps[i2c]->aouts();
+      _dins+=_exps[i2c]->dins();
+      _ains+=_exps[i2c]->ains();
+    }
+  }
+
+  _aoutMap=(uint16_t *)calloc(_aouts, sizeof(_aoutMap[0]));
+  _doutMap=(uint16_t *)calloc(_douts, sizeof(_doutMap[0]));
+  _ainMap=(uint16_t *)calloc(_ains, sizeof(_ainMap[0]));
+  _dinMap=(uint16_t *)calloc(_dins, sizeof(_dinMap[0]));
+
+  initMaps();
+
+  // Setup networking
   _udp = new WiFiUDP();
   if(!_udp)
     return;
@@ -71,27 +132,17 @@ void Domotic::handleNet()
 
     if(_udp->destinationIP()==_mcastAddr) {
       // Process multicast data
-//Serial.printf("mcast1: '%s'\n", (char*)_lastpkt);
       if(_lastpkt[offset]=='S') {
         // Parse signature
         ++offset;
         verifySig(offset, len, true);
       }
-//Serial.printf("mcast2: '%s'\n", (char*)_lastpkt+offset);
       if(data-offset>=10 && _lastpkt[offset]=='U') {	// Regular update
-        int sNode=0;
         Domotic::UpdDir d;
         Domotic::UpdType t;
+        uint16_t group=0;
         uint8_t b;
         offset=1;
-
-        // Read 4 characters as sender nodeId
-        if(2<hex2uint8(_lastpkt+offset, &b)) return;
-        sNode=b;
-        offset+=2;
-        if(2<hex2uint8(_lastpkt+offset, &b)) return;
-        sNode=(sNode<<8)+b;
-        offset+=2;
 
         // Input or output?
         if(_lastpkt[offset]=='I') {
@@ -112,11 +163,23 @@ void Domotic::handleNet()
         } else
           return;
 
-        // Channel
-        if(2<hex2uint8(_lastpkt+offset, &b)) return;
+        // Group
+        if(hex2uint8(_lastpkt+offset, &b)) return;
+        group=b;
+        offset+=2;
+        if(hex2uint8(_lastpkt+offset, &b)) return;
+        group=(group<<8)+b;
+        offset+=2;
 
+        if(Domotic::TYPE_DIGITAL) {
+          if('1'==_lastpkt[offset]) b=1;
+          else if('0'==_lastpkt[offset]) b=0;
+          else return;
+        } else {
+          b=0;
+        }
         // Packet parsed OK, run callback
-        processNotification(sNode, d, t, b, data-offset, offset);
+        processNotification(d, t, group, b, data-offset, offset);
       } else if(_lastpkt[offset]=='T' && data-offset>=12) { // Time update (usually signed)
         ++offset; // Skip 'T'
         uint8_t epoch;
@@ -125,11 +188,10 @@ void Domotic::handleNet()
         bool dst=false;
         uint8_t b;
 
-        if(2<hex2uint8(_lastpkt+offset, &epoch)) return;
+        if(hex2uint8(_lastpkt+offset, &epoch)) return;
         // epoch is currently fixed at 0
         if(0!=epoch) return;
         offset+=2;
-//Serial.printf("epoch=%d\n", epoch);
 
         if(hex2uint8(_lastpkt+offset, &b)) return;
         tstamp=b;
@@ -148,7 +210,6 @@ void Domotic::handleNet()
         tz=b&0x1F | ((b&0x10)?0xF0:0); // theoretically from -16 to +15, actually from -12 to +12
         dst=b&0x20;
         offset+=2;
-//Serial.printf("tz=%d, dst=%c\n", tz, dst?'1':'0');
 
         tstamp+=(millis()-rcv+500)/1000; // verifying Ed25519 sig takes ~900ms, round it to 1s
         processTimeUpdate(epoch, tstamp, tz, dst);
@@ -193,6 +254,7 @@ void Domotic::handleNet()
 Domotic::DomError Domotic::processCommand(int &offset, int &len)
 {
 /*
+    Process only the *Spec part (offset already points past 'C')
     CommandPacket := <'C'> {DigitalOutSpec | AnalogOutSpec | RegisterSpec}
       DigitalOutSpec := <'D'> <output#:ByteHex> <'0'|'1'|'T'>
       AnalogOutSpec := <'A'> <input#:ByteHex> <value:WordHex>
@@ -203,18 +265,347 @@ Answers:
   CA: <'W'> <'A'>
   CR: <'W'> <'R'>
 */
-  offset=0; len=0; return Domotic::DomError::ERR_CMD_UNS;
-/* @@@ TODO Calls:
-    virtual DomError writeDigitalOut(uint8_t dout, bool value) {return DomError::ERR_CMD_BAD;};
-    virtual DomError writeAnalogOut(uint8_t aout, uint16_t value) {return DomError::ERR_CMD_BAD;};
-    virtual DomError writeRegister(uint8_t reg, int offset, int len) {return DomError::ERR_CMD_BAD;};
-*/
+  char type=_lastpkt[offset++];
+
+#warning "Could be a problem with delayed verification of signatures?"
+  _lastpkt[0]='W'; // Overwrites received packet (only already-parsed part)
+  _lastpkt[1]=type; // In unsecure packets simply overwites that byte with its current contents
+
+  // Assuming all object types follow the same layout (type obj param) where only param changes for different types
+  uint8_t obj;
+  if(Domotic::hex2uint8(_lastpkt+offset, &obj)) {
+    return DomError::ERR_CMD_BAD; // no hex chars where expected
+  }
+  offset+=2;
+
+  switch(type) {
+    case 'D': {
+      bool v='1'==_lastpkt[offset];
+      // Handle "toggle" state
+      if('T'==_lastpkt[offset]) {
+        readDigitalOut(obj, v); // Read current state
+        v=!v; // Toggle it
+      }
+      _lastpkt[2]=v?'1':'0';
+      offset=0; len=3; // Answer is ready... IF write succeeds
+
+      return writeDigitalOut(obj, v);
+    }; break;
+    case 'A': {
+      uint8_t b;
+      uint16_t v=0;
+      if(hex2uint8(_lastpkt+offset, &b)) return DomError::ERR_CMD_BAD; // no hex chars where expected
+      v=uint16_t(b)<<8;
+      offset+=2;
+      if(hex2uint8(_lastpkt+offset, &b)) return DomError::ERR_CMD_BAD; // no hex chars where expected
+      v+=b;
+      return writeAnalogOut(obj, v);
+    }; break;
+    case 'R': {
+      return DomError::ERR_UNSUPP;
+#warning "incomplete!"
+    }; break;
+  }
+  // Unsupported command
+  return Domotic::DomError::ERR_CMD_UNS;
 };
+
+Domotic::DomError Domotic::writeDigitalOut(uint8_t obj, bool val)
+{
+  Domotic::DomError e=DomError::ERR_CMD_RANGE;
+  if(_douts<obj) return e;
+
+  if(obj<douts()) {
+    // Accessing local output
+    dout(obj, val);
+    e=DomError::ERR_OK;
+  } else {
+    // Accessing expansion output
+    obj-=douts(); // Skip local douts
+
+    // Scan expansions
+    for(uint8_t addr=0; addr<Domotic::MAX_EXPS; ++addr) {
+      if(_exps[addr]) {
+        if(obj<_exps[addr]->douts()) {
+          _exps[addr]->dout(obj, val);
+          e=Domotic::DomError::ERR_OK;
+          break; // Exit for() loop
+        }
+        obj-=_exps[addr]->douts(); // obj was not in this expansion, try next one
+      }
+    }
+  }
+  return e;
+}
+
+Domotic::DomError Domotic::writeAnalogOut(uint8_t obj, uint16_t val)
+{
+  Domotic::DomError e=DomError::ERR_CMD_RANGE;
+  if(_aouts<obj) return e;
+
+  if(obj<aouts()) {
+    // Accessing local output
+    aout(obj, val);
+    e=DomError::ERR_OK;
+  } else {
+    // Accessing expansion output
+    obj-=aouts(); // Skip local aouts
+
+    // Scan expansions
+    for(uint8_t addr=0; addr<Domotic::MAX_EXPS; ++addr) {
+      if(_exps[addr]) {
+        if(obj<_exps[addr]->aouts()) {
+          _exps[addr]->aout(obj, val);
+          e=Domotic::DomError::ERR_OK;
+          break; // Exit for() loop
+        }
+        obj-=_exps[addr]->aouts(); // obj was not in this expansion, try next one
+      }
+    }
+  }
+  return e;
+};
+
+Domotic::DomError Domotic::readAnalogIn(uint8_t obj, uint16_t &val)
+{
+  Domotic::DomError e=DomError::ERR_CMD_RANGE;
+  if(_ains<obj) return e;
+
+  if(obj<ains()) {
+    // Accessing local lines
+    val=ain(obj);
+    e=DomError::ERR_OK;
+  } else {
+    // Accessing expansion lines
+    obj-=ains(); // Skip local aouts
+
+    // Scan expansions
+    for(uint8_t addr=0; addr<Domotic::MAX_EXPS; ++addr) {
+      if(_exps[addr]) {
+        if(obj<_exps[addr]->ains()) {
+          val=_exps[addr]->ain(obj);
+          e=Domotic::DomError::ERR_OK;
+          break; // Exit for() loop
+        }
+        obj-=_exps[addr]->ains(); // obj was not in this expansion, try next one
+      }
+    }
+  }
+  return e;
+}
+
+Domotic::DomError Domotic::readAnalogOut(uint8_t obj, uint16_t &val)
+{
+  Domotic::DomError e=DomError::ERR_CMD_RANGE;
+  if(_aouts<obj) return e;
+
+  if(obj<aouts()) {
+    // Accessing local lines
+    val=aout(obj);
+    e=Domotic::DomError::ERR_OK;
+  } else {
+    // Accessing expansion lines
+    obj-=aouts(); // Skip local aouts
+
+    // Scan expansions
+    for(uint8_t addr=0; addr<Domotic::MAX_EXPS; ++addr) {
+      if(_exps[addr]) {
+        if(obj<_exps[addr]->aouts()) {
+          val=_exps[addr]->aout(obj);
+          e=Domotic::DomError::ERR_OK;
+          break; // Exit for() loop
+        }
+        obj-=_exps[addr]->aouts(); // obj was not in this expansion, try next one
+      }
+    }
+  }
+  return e;
+}
+
+Domotic::DomError Domotic::readDigitalOut(uint8_t obj, bool &val)
+{
+  Domotic::DomError e=DomError::ERR_CMD_RANGE;
+  if(_douts<obj) return e;
+
+  if(obj<douts()) {
+    // Accessing local lines
+    val=dout(obj);
+    e=Domotic::DomError::ERR_OK;
+  } else {
+    // Accessing expansion lines
+    uint8_t o=obj-douts();
+
+    // Scan expansions
+    for(uint8_t addr=0; addr<Domotic::MAX_EXPS; ++addr) {
+      if(_exps[addr]) {
+        if(obj<_exps[addr]->douts()) {
+          val=_exps[addr]->dout(obj);
+          e=Domotic::DomError::ERR_OK;
+          break;
+        }
+        o-=_exps[addr]->douts();
+      }
+    }
+  }
+  return e;
+}
+
+Domotic::DomError Domotic::readDigitalIn(uint8_t obj, bool &val)
+{
+  Domotic::DomError e=DomError::ERR_CMD_RANGE;
+  if(_ains<obj) return e;
+
+  if(obj<dins()) {
+    val=din(obj);
+    e=Domotic::DomError::ERR_OK;
+  } else {
+    // Scan expansions
+    uint8_t o=obj-dins();
+    for(uint8_t addr=0; addr<Domotic::MAX_EXPS; ++addr) {
+      if(_exps[addr]) {
+        if(obj<_exps[addr]->dins()) {
+          val=_exps[addr]->din(obj);
+          e=Domotic::DomError::ERR_OK;
+          break;
+        }
+        o-=_exps[addr]->dins();
+      }
+    }
+  }
+  return e;
+}
+
+Domotic::DomError Domotic::readAnalogOutSpec(uint8_t obj, int &len)
+{
+  Domotic::DomError e=DomError::ERR_CMD_RANGE;
+  if(_aouts<obj) return e;
+
+  char *out=(char *)_lastpkt+len;
+
+  if(obj<aouts()) {
+    // Accessing local lines
+    len+=getAnalogOutSpec(obj, out, DOMOTIC_MAX_PKT_SIZE-len);
+    e=Domotic::DomError::ERR_OK;
+  } else {
+    // Accessing expansion lines
+    obj-=aouts(); // Skip local lines
+
+    // Scan expansions
+    for(uint8_t addr=0; addr<Domotic::MAX_EXPS; ++addr) {
+      if(_exps[addr]) {
+        if(obj<_exps[addr]->aouts()) {
+          len+=_exps[addr]->getAnalogOutSpec(obj, out, DOMOTIC_MAX_PKT_SIZE-len);
+          e=Domotic::DomError::ERR_OK;
+          break; // Exit for() loop
+        }
+        obj-=_exps[addr]->aouts(); // obj was not in this expansion, try next one
+      }
+    }
+  }
+  return e;
+}
+
+Domotic::DomError Domotic::readAnalogInSpec(uint8_t obj, int &len)
+{
+  Domotic::DomError e=DomError::ERR_CMD_RANGE;
+  if(_ains<obj) return e;
+
+  char *out=(char *)_lastpkt+len;
+
+  if(obj<ains()) {
+    // Accessing local lines
+    len+=getAnalogInSpec(obj, out, DOMOTIC_MAX_PKT_SIZE-len);
+    e=Domotic::DomError::ERR_OK;
+  } else {
+    // Accessing expansion lines
+    obj-=ains(); // Skip local lines
+
+    // Scan expansions
+    for(uint8_t addr=0; addr<Domotic::MAX_EXPS; ++addr) {
+      if(_exps[addr]) {
+        if(obj<_exps[addr]->ains()) {
+          len+=_exps[addr]->getAnalogInSpec(obj, out, DOMOTIC_MAX_PKT_SIZE-len);
+          e=Domotic::DomError::ERR_OK;
+          break; // Exit for() loop
+        }
+        obj-=_exps[addr]->ains(); // obj was not in this expansion, try next one
+      }
+    }
+  }
+  return e;
+}
+
+Domotic::DomError Domotic::readDigitalOutSpec(uint8_t obj, int &len)
+{
+  Domotic::DomError e=DomError::ERR_CMD_RANGE;
+  if(_douts<obj) return e;
+
+  // Digital lines are always booleans
+  _lastpkt[len++]='B';
+
+  char *out=(char *)_lastpkt+len;
+
+  if(obj<douts()) {
+    // Accessing local lines
+    len+=getDigitalOutName(obj, out, DOMOTIC_MAX_PKT_SIZE-len);
+
+    e=Domotic::DomError::ERR_OK;
+  } else {
+    // Accessing expansion lines
+    obj-=douts(); // Skip local lines
+
+    // Scan expansions
+    for(uint8_t addr=0; addr<Domotic::MAX_EXPS; ++addr) {
+      if(_exps[addr]) {
+        if(obj<_exps[addr]->douts()) {
+          len+=_exps[addr]->getDigitalOutName(obj, out, DOMOTIC_MAX_PKT_SIZE-len);
+          e=Domotic::DomError::ERR_OK;
+          break; // Exit for() loop
+        }
+        obj-=_exps[addr]->douts(); // obj was not in this expansion, try next one
+      }
+    }
+  }
+  return e;
+}
+
+Domotic::DomError Domotic::readDigitalInSpec(uint8_t obj, int &len)
+{
+  Domotic::DomError e=DomError::ERR_CMD_RANGE;
+  if(_dins<obj) return e;
+
+  // Digital lines are always booleans
+  _lastpkt[len++]='B';
+
+  char *out=(char *)_lastpkt+len;
+
+  if(obj<dins()) {
+    // Accessing local lines
+    len+=getDigitalInName(obj, out, DOMOTIC_MAX_PKT_SIZE-len);
+    e=Domotic::DomError::ERR_OK;
+  } else {
+    // Accessing expansion lines
+    obj-=dins(); // Skip local lines
+
+    // Scan expansions
+    for(uint8_t addr=0; addr<Domotic::MAX_EXPS; ++addr) {
+      if(_exps[addr]) {
+        if(obj<_exps[addr]->dins()) {
+          len+=_exps[addr]->getDigitalInName(obj, out, DOMOTIC_MAX_PKT_SIZE-len);
+          e=Domotic::DomError::ERR_OK;
+          break; // Exit for() loop
+        }
+        obj-=_exps[addr]->dins(); // obj was not in this expansion, try next one
+      }
+    }
+  }
+  return e;
+}
 
 Domotic::DomError Domotic::processInfo(int &offset, int &len)
 {
 /*
-    InfoPacket := <'I'> {DigitalReadSpec | AnalogReadSpec | AnalogInfoSpec | RegisterReadSpec}
+    InfoPacket := <'I'> {DigitalReadSpec | AnalogReadSpec | InfoSpec | RegisterReadSpec}
       DigitalReadSpec := <'D'> <'I'|'O'> <io#:ByteHex>
       AnalogReadSpec := <'A'> <'I'|'O'> <io#:ByteHex>
       InfoSpec := <'I'> <'A'|'D'> <'I'|'O'> <io#:ByteHex>
@@ -223,92 +614,106 @@ Domotic::DomError Domotic::processInfo(int &offset, int &len)
 The first character ('I') is already parsed, so offset is *at least* 1, but it could be bigger if the packet is encrypted and/or signed.
 
 Answers:
-  IID: <'R'> <'D'> <'0'|'1'>
-  IIA: <'R'> <'A'> <value#:WordHex>
-  III: <'R'> <'I'> {InfoBool | InfoPercent | InfoTemp | InfoPower | InfoUserFloat | InfoText} <descr:<0x20-0x7f>*>
-    InfoBool := <'B'>
+  ID: <'R'> <'D'> <'0'|'1'>
+  IA: <'R'> <'A'> <value#:WordHex>
+  IR: <'R'> <'R'> {<'L'> <len:ByteHex> | <'V'> <0x20-0x7f>*}
+  II: <'R'> <'I'> {InfoBool | InfoPercent | InfoTemp | InfoPower | InfoUserFloat | InfoText} <descr:<0x20-0x7f>*>
+    InfoBool := <'B'>                                                   // Used for digital lines
     InfoPercent := <'%'> <decimals:0-3>
-    InfoTemp := <'K'> <decimals:0-2>					// By default room temperatures are reported in centi-Kelvin (K2)
-    InfoPower := <'W'> <decimals:0-2>					// Power in Watts (0.00 to 65535) -- usually home appliances use decimals=0 (1W resolution)
-    InfoUserFloat := <'F'> <numerator:WordHex> <denominator:WordHex>	// Float=(numerator*regvalue)/(denominator*65536); note that result is strictly < numerator/denominator
+    InfoTemp := <'K'> <decimals:0-2>                                    // By default room temperatures are reported in centi-Kelvin (K2)
+    InfoPower := <'W'> <decimals:0-2>                                   // Power in Watts (0.00 to 65535) -- usually home appliances use decimals=0 (1W resolution)
+    InfoUserFloat := <'F'> <numerator:WordHex> <denominator:WordHex>    // Float=(numerator*regvalue)/(denominator*65536); note that result is strictly < numerator/denominator
     InfoText := <'T'> <maxlen:ByteHex>
-  IIR: <'R'> <'R'> {<'L'> <len:ByteHex> | <'V'> <0x20-0x7f>*}
 */
-  char act=_lastpkt[offset];
-  ++offset; // Parsed "*Spec" part, in 'act'
 
+  char act=_lastpkt[offset++];
+  char type, dir;
+  DomError r=DomError::ERR_OK;
   uint8_t obj=0;
 
   _lastpkt[0]='R'; // Overwrites received packet (only already-parsed part)
   _lastpkt[1]=act; // In unsecure packets simply overwites that byte with its current contents
 
+  len=2;
+
   switch(act) {
     case 'D': // Read digital line
-      // Serial.println("IDxx");
+      // Serial.println("IDdxx");
+      dir=_lastpkt[offset++];
       if(Domotic::hex2uint8(_lastpkt+offset, &obj)) {
-        return DomError::ERR_INF_BAD; // no hex chars where expected
+        return Domotic::DomError::ERR_INF_BAD; // no hex chars where expected
       }
-      _lastpkt[2]=_lastpkt[offset];
-      len=3;
-
-      if('I'==_lastpkt[2]) {
-        if(_dins<obj) return DomError::ERR_INF_RANGE; else readDigitalIn(obj, offset, len);
-      } else if('O'==_lastpkt[2]) {
-        if(_douts<obj) return DomError::ERR_INF_RANGE; else readDigitalOut(obj, offset, len);
+      if(Domotic::UpdDirC::DIRC_IN==dir) {
+        bool val;
+        r=readDigitalIn(obj, val);
+        if(DomError::ERR_OK==r) {
+          _lastpkt[len++]=(val?'1':'0');
+        }
+      } else if(Domotic::UpdDirC::DIRC_OUT==dir) {
+        bool val;
+        r=readDigitalOut(obj, val);
+        if(DomError::ERR_OK==r) {
+          _lastpkt[len++]=(val?'1':'0');
+        }
       } else {
         return DomError::ERR_INF_BAD;
       }
       break;
     case 'A': // Read analog line
-      // Serial.println("IAxx");
+      // Serial.println("IAdxx");
+      dir=_lastpkt[offset++];
       if(Domotic::hex2uint8(_lastpkt+offset, &obj)) {
         return DomError::ERR_INF_BAD; // no hex chars where expected
       }
-      _lastpkt[2]=_lastpkt[offset];
-      len=3;
 
-      if('I'==_lastpkt[2]) {
-        if(_ains<obj) return DomError::ERR_INF_RANGE; else readAnalogIn(obj, offset, len);
-      } else if('O'==_lastpkt[2]) {
-        if(_aouts<obj) return DomError::ERR_INF_RANGE; else readAnalogOut(obj, offset, len);
+      if(Domotic::UpdDir::DIR_IN==dir) {
+        uint16_t val;
+        r=readAnalogIn(obj, val);
+        if(DomError::ERR_OK==r) {
+          len+=sprintf((char *)_lastpkt+len, "%04X", val);
+        }
+      } else if(Domotic::UpdDir::DIR_OUT==dir) {
+        uint16_t val;
+        r=readAnalogOut(obj, val);
+        if(DomError::ERR_OK==r) {
+          len+=sprintf((char *)_lastpkt+len, "%04X", val);
+        }
       } else {
         return DomError::ERR_INF_BAD;
       }
       break;
     case 'I': // Read spec
-      // Serial.println("II.xx");
-      if(_lastpkt[offset]=='A') {
-        _lastpkt[2]='A';
-      } else if(_lastpkt[offset]=='D') {
-        _lastpkt[2]='D';
-      } else
+      // Serial.println("IItdxx");
+
+      type=_lastpkt[offset++];
+      if(UpdTypeC::TYPEC_ANALOG!=type && UpdTypeC::TYPEC_DIGITAL!=type) {
         return DomError::ERR_INF_BAD; // unknown line type
-      ++offset;
-      if(Domotic::hex2uint8(_lastpkt+offset+1, &obj)) {
+      }
+//      _lastpkt[len++]=type; // Not in the protocol! Decoding just requires Info*
+
+      dir=_lastpkt[offset++];
+      if((Domotic::UpdDirC::DIRC_IN!=dir) && (Domotic::UpdDirC::DIRC_OUT!=dir)) {
+        return DomError::ERR_INF_BAD; // unknown line type
+      }
+      if(Domotic::hex2uint8(_lastpkt+offset, &obj)) {
         return DomError::ERR_INF_BAD; // no hex chars where expected
       }
-      _lastpkt[3]=_lastpkt[offset];
-      len=4;
 
-      if(_lastpkt[2]=='A') {
-        if('I'==_lastpkt[3]) {
+      if(UpdTypeC::TYPEC_ANALOG==type) {
+        if(Domotic::UpdDirC::DIRC_IN==dir) {
           // Serial.println("IIAIxx");
-          if(_ains<obj) return DomError::ERR_INF_RANGE; else readAnalogInSpec(obj, len);
-        } else if('O'==_lastpkt[3]) {
+          r=readAnalogInSpec(obj, len);
+        } else { // Cannot be anything else than 'O' (already checked)
           // Serial.println("IIAOxx");
-          if(_aouts<obj) return DomError::ERR_INF_RANGE; else readAnalogOutSpec(obj, len);
-        } else {
-          return DomError::ERR_INF_BAD;
+          r=readAnalogOutSpec(obj, len);
         }
       } else { // No need to check: can *only* be 'D' (previously checked)
-        if('I'==_lastpkt[3]) {
+        if(Domotic::UpdDirC::DIRC_IN==dir) {
           // Serial.println("IIDIxx");
-          if(_dins<obj) return DomError::ERR_INF_RANGE; else readDigitalInSpec(obj, len);
-        } else if('O'==_lastpkt[3]) {
+          r=readDigitalInSpec(obj, len);
+        } else { // Cannot be anything else than 'O' (already checked)
           // Serial.println("IIDOxx");
-          if(_douts<obj) return DomError::ERR_INF_RANGE; else readDigitalOutSpec(obj, len);
-        } else {
-          return DomError::ERR_INF_BAD;
+          r=readDigitalOutSpec(obj, len);
         }
       }
       break;
@@ -320,7 +725,7 @@ Answers:
         case 0x00: // Version & node info
           _lastpkt[2]='V';
           len=3;
-          len+=sprintf((char *)(_lastpkt+offset),
+          len+=sprintf((char *)(_lastpkt+len),
             PROTOVERSION " %d %d %d %d %d %c", _douts, _dins, _aouts, _ains, _tlen, _utf?'T':'F');
           break;
         case 0x01: // Node keys and supported algorithms
@@ -329,7 +734,7 @@ Answers:
           if(Domotic::hex2uint8(_lastpkt+offset+2, &r)) { // Missing optional param: read array len
             _lastpkt[2]='L';
             len=3;
-            len+=sprintf((char*)(_lastpkt+offset), "%02X", 0); // @@@ TODO: get keyslot counter
+            len+=sprintf((char*)(_lastpkt+len), "%02X", 0); // @@@ TODO: get keyslot counter
           } else {
             _lastpkt[2]='V';
             len=3;
@@ -368,7 +773,7 @@ Answers:
             if(r<_douts) {
               _lastpkt[2]='V';
               len=3;
-              len+=sprintf((char*)(_lastpkt+len), "%04X", _doutMap[r]);
+              len+=sprintf((char*)_lastpkt+len, "%04X", _doutMap[r]);
             } else {
               return DomError::ERR_INF_RANGE;
             }
@@ -466,6 +871,23 @@ Answers:
   return ERR_OK;
 }
 
+bool Domotic::sigBuff(char* buff, uint16_t keyID)
+{
+  int len=strlen(buff);
+  int slen=128;
+#warning "@@@ TODO: get signature len from key type"
+
+  if(DOMOTIC_MAX_PKT_SIZE<(1+4+slen+len))
+    return true;
+
+  memmove(buff+1+4+slen, buff, len);
+  buff[0]=Domotic::DomPktType::PKT_SIG;
+  sprintf(buff+1, "%04X", keyID);
+  for(int t=0; t<slen; ++t) buff[1+4+t]='0'; // @@@ TODO
+
+  return false;
+}
+
 void Domotic::verifySig(int &offset, int len, bool fast)
 {
   //Serial.printf("Verify (%s)\n", fast?"FAST":"full");
@@ -517,7 +939,7 @@ void Domotic::verifySig(int &offset, int len, bool fast)
   }
 
   int cnt;
-  // Replace hex-encoded signature with binary one
+  // Replace in-place hex-encoded signature with binary one
   for(cnt=0; cnt<sigLen && off<len; ++cnt, off+=2) {
     if(hex2uint8(_lastpkt+off, signature+cnt)) break;
   }
@@ -567,23 +989,105 @@ void Domotic::answer(Domotic::DomError err, size_t size, int offset)
   _udp->endPacket();
 }
 
-// Send a multicast notification of the changed state
-void Domotic::notify(Domotic::UpdDir d, Domotic::UpdType t, uint8_t num, const char *txt)
+/*
+ * Send a multicast notification of the changed IO state (notify()) or current time (notifyTime())
+ * Does not (currently) modify _lastpkt
+ *  UpdatePkt := <'U'> EventSpec
+ *    EventSpec := InEvent | OutEvent | TimeEvent
+ *      InEvent := <'I'> {DigitalEvent | AnalogEvent}
+ *        DigitalEvent := <'D'> <group:WordHex> <'0'|'1'>
+ *        AnalogEvent := <'A'> <group:WordHex> <value:WordHex>
+ *      OutEvent := <'O'> {DigitalEvent | AnalogEvent}
+ *      TimeEvent := <'T'> <epoch:ByteHex> <hictr:WordHex> <loctr:WordHex> <tz_dst:ByteHex>
+ */
+
+void Domotic::notify(Domotic::UpdDir d, Domotic::UpdType t, uint8_t num, uint16_t signKey)
 {
   if(!_initialized)
     return;
 
+  uint16_t *pGroup;
+  char buff[DOMOTIC_MAX_PKT_SIZE];
+  int pos=0;
+  Domotic::DomError e=Domotic::DomError::ERR_OK;
+
+  buff[pos++]=Domotic::DomPktType::PKT_UPD;
+  buff[pos++]=d?'O':'I';
+
+  if(t==Domotic::UpdType::TYPE_ANALOG) {
+    // Analog IO
+    buff[pos++]='A';
+    uint16_t val=0;
+
+    if(Domotic::UpdDir::DIR_IN==d) {
+      e=readAnalogIn(num, val);
+      pGroup=_ainMap; // Delay dereference after error check
+    } else {
+      e=readAnalogOut(num, val);
+      pGroup=_aoutMap; // Delay dereference after error check
+    }
+    if(Domotic::DomError::ERR_OK!=e || !pGroup || 0==pGroup[num])
+      return;
+
+    sprintf(buff+pos, "%04X%04X",
+      pGroup[num],
+      val
+      );
+  } else {
+    // Digital IO
+    buff[pos++]='D';
+    bool val;
+
+    if(Domotic::UpdDir::DIR_IN==d) {
+      e=readDigitalIn(num, val);
+      pGroup=_dinMap; // Delay dereference after error check
+    } else {
+      e=readDigitalOut(num, val);
+      pGroup=_doutMap; // Delay dereference after error check
+    }
+    if(Domotic::DomError::ERR_OK!=e || !pGroup || 0==pGroup[num])
+      return;
+
+    sprintf(buff+pos, "%04X%c",
+      pGroup[num],
+      val?'1':'0'
+      );
+  }
+
+  if(0xffff!=signKey) {
+    // Create actual signature
+    if(sigBuff(buff, signKey))
+      return;
+  }
+
   _udp->beginPacketMulticast(_mcastAddr, _port, WiFi.localIP());
-  _udp->printf("%c%04X%c%c%02X",
+  _udp->println((const char *)buff);
+  _udp->endPacket();
+
+}
+
+void Domotic::notifyTime(uint8_t epoch, uint32_t counter, uint8_t tz, uint16_t signKey)
+{
+  if(!_initialized)
+    return;
+
+  char buff[DOMOTIC_MAX_PKT_SIZE];
+
+  sprintf(buff, "%c%02X%08X%02X",
     Domotic::DomPktType::PKT_UPD,
-    _nodeID,
-    d?'O':'I',
-    t?'D':'A',
-    num
+    epoch,
+    counter,
+    tz
     );
-  if(txt)
-    _udp->print(txt);
-  _udp->write('\n');
+
+  if(0xffff!=signKey) {
+    // Create actual signature
+    if(sigBuff(buff, signKey))
+      return;
+  }
+
+  _udp->beginPacketMulticast(_mcastAddr, _port, WiFi.localIP());
+  _udp->println((const char *)buff);
   _udp->endPacket();
 }
 

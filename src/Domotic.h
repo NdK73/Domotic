@@ -3,6 +3,21 @@
 
 /********************************
  * Base class for domotic protocol handling
+ *
+ * When implementing a sketch that uses Domotic protocol:
+ * - derive your class from Domotic
+ * - override the methods from ains() to handler() as needed
+ * - instantiate your class (global scope)
+ * - call Wire.begin(sda, scl) *before* calling yourclass.begin()
+ * - call yourclass.begin() from setup()
+ * - call yourclass.handle() from loop()
+ * - manage *all* inputs from yourclass.handler() calling Domotic::notify() when needed
+ *
+ * To auto-learn a node (very minimal!):
+ * - Send IR00 to determine presence and number of lines
+ * - for each line (nn) :
+ *   - send IR2tnn to read its mapping
+ *   - send IItdnn to read its name (t={A|D},d={I|O})
  */
 #include <ESP8266WiFi.h>
 #include <WiFiUdp.h>
@@ -21,8 +36,10 @@
 #define DOMOTIC_DEF_UDP_MCAST 239,255,215,74
 
 #include "DomoticCrypto.h"
+#include "expansions/DomoticIODescr.h"
+#include "expansions/DomoNodeExpansion.h"
 
-class Domotic
+class Domotic : public DomoticIODescr
 {
   public:
     enum DomError : uint8_t {
@@ -68,7 +85,7 @@ class Domotic
 
   protected:
     enum DomPktType : char {
-      PKT_ANS = 'A',  // Answer packet (can *not* appear in unicast packet)
+      PKT_ANS = 'A',  // Answer packet (can *not* appear in multicast packet)
       PKT_CMD = 'C',  // Command (write)
       PKT_ENC = 'E',  // Encrypted Packet (contains signed/command/request)
       PKT_INF = 'I',  // Request info (read)
@@ -76,9 +93,19 @@ class Domotic
       PKT_UPD = 'U',  // Multicast update (can *not* appear in unicast packet)
     };
 
+    enum UpdDirC : char {
+      DIRC_IN  = 'I',
+      DIRC_OUT = 'O'
+    };
+
     enum UpdDir : bool {
       DIR_IN = false,
       DIR_OUT = true
+    };
+
+    enum UpdTypeC : char {
+      TYPEC_ANALOG = 'A',
+      TYPEC_DIGITAL= 'D'
     };
 
     enum UpdType : bool {
@@ -86,77 +113,69 @@ class Domotic
       TYPE_DIGITAL= true
     };
 
+    // This block should always be overridden (at least partially)
+    // DomoticIODescr interface
+    virtual int ains() { return 0; };
+    virtual int dins() { return 0; };
+    virtual int aouts() { return 0; };
+    virtual int douts() { return 0; };
+    virtual int ain(int i) { return 0; };
+    virtual bool din(int i) { return false; };
+    virtual int aout(int o) { return 0; };
+    virtual bool dout(int o) { return false; };
+    virtual int aout(int o, int val) { return 0; };
+    virtual bool dout(int o, bool val) { return false; };
+    virtual int getAnalogInSpec(int i, char* buff, int maxlen) { return 0; };  // Returns number of characters written
+    virtual int getAnalogOutSpec(int o, char* buff, int maxlen) { return 0; }; // Returns number of characters written
+    virtual int getDigitalInName(int i, char* buff, int maxlen) { return 0; }; // Returns number of characters written
+    virtual int getDigitalOutName(int o, char* buff, int maxlen) { return 0; };// Returns number of characters written
+    virtual int setDigitalInName(int i, const char *name) { return 0; };       // Returns number of characters written
+    virtual int setDigitalOutName(int o, const char *name) { return 0; };      // Returns number of characters written
+    virtual int setAnalogInName(int i, const char *name) { return 0; };        // Returns number of characters written
+    virtual int setAnalogOutName(int o, const char *name) { return 0; };       // Returns number of characters written
+
+    virtual void initMaps() {}; // Called by begin() to initialize IO mapping data (arrays are already allocated and initialized to 0)
+    virtual void handler() {}; // Called by handle() to process application-specific logic in derived class and notify changes
+
+    // No return: multicast packets don't send answers
+    virtual void processNotification(UpdDir d, UpdType t, int group, uint8_t val, size_t size, int offset=0) {};
+    virtual void processTimeUpdate(uint8_t epoch, uint32_t timestamp, int8_t tz, bool dst) {};
+
+    // Probably the following methods will never need overrides
+    // ********************************************************
+
     int recvPkt(); // Called by handleNet(); returns amount of available new data in _lastpkt
-    virtual void handler() {}; // Called by handle() to process application-specific logic in derived class
 
     // Callbacks receive the offset in _lastpkt to start parsing from, for up to 'len' bytes.
     // If present, encrypted packets are decrypted and signed ones are verified) *before* callback.
     // Returns an error code and (iff err is 00) offset and len of a string (starting at _lastpkt) to be appended to answer
     // Can overwrite _lastpkt at will up to DOMOTIC_MAX_PKT_SIZE.
     // These are quite low-level and usually should *not* be redefined
-    virtual DomError processCommand(int &offset, int &len) final;
-    virtual DomError processInfo(int &offset, int &len) final;
+    virtual DomError processCommand(int &offset, int &len);
+    virtual DomError processInfo(int &offset, int &len);
 
-    // Higher level callbacks, to be overridden, parameters range already verified
-    // Read methods write answer (only the value) in _lastpkt+offset (at most 'len' bytes)
-    virtual DomError writeDigitalOut(uint8_t dout, bool value) {return DomError::ERR_CMD_BAD;};
-    virtual DomError writeAnalogOut(uint8_t aout, uint16_t value) {return DomError::ERR_CMD_BAD;};
-    virtual DomError writeRegister(uint8_t reg, int &offset, int len) {return DomError::ERR_CMD_BAD;};
-    virtual DomError readDigitalOut(uint8_t dout, uint16_t& val) {return DomError::ERR_INF_BAD; };
-    virtual DomError readDigitalOut(uint8_t dout, int &offset, int &len) {	// Writes 1 byte ('0' or '1')
-      uint16_t val;
-      DomError r=readDigitalOut(dout, val);
-      if(DomError::ERR_OK==r) {
-        len+=sprintf((char *)_lastpkt+offset, "%c", val?'1':'0');
-      }
-      return r;
-     };
-    virtual DomError readAnalogOut(uint8_t aout, uint16_t &val) {return DomError::ERR_INF_BAD; };
-    virtual DomError readAnalogOut(uint8_t aout, int &offset, int &len) {	// Writes 4 bytes (WordHex)
-      uint16_t val;
-      DomError r=readAnalogOut(aout, val);
-      if(DomError::ERR_OK==r) {
-        len+=sprintf((char *)_lastpkt+offset, "%04X", val);
-      }
-      return r;
-     };
-    virtual DomError readDigitalIn(uint8_t ain, uint16_t &val) {return DomError::ERR_INF_BAD; };
-    virtual DomError readDigitalIn(uint8_t din, int &offset, int &len) {	// Writes 1 byte ('0' or '1')
-      uint16_t val;
-      DomError r=readDigitalIn(din, val);
-      if(DomError::ERR_OK==r) {
-        len+=sprintf((char *)_lastpkt+offset, "%04X", val);
-      }
-      return r;
-     };
-    virtual DomError readAnalogIn(uint8_t ain, uint16_t &val) {return DomError::ERR_INF_BAD; };
-    virtual DomError readAnalogIn(uint8_t ain, int &offset, int &len) {		// Writes 4 byte (WordHex)
-      uint16_t val;
-      DomError r=readAnalogIn(ain, val);
-      if(DomError::ERR_OK==r) {
-        len+=sprintf((char *)_lastpkt+offset, "%04X", val);
-      }
-      return r;
-     };
+    // Dispatchers for operations: these methods convert from "absolute" IO to device+io and call appropriate (overridden) method
+    // Read methods write answer (only the value) in _lastpkt+offset (at most 'len' bytes) or in the passed object 'val'
+    virtual DomError writeDigitalOut(uint8_t dout, bool value);
+    virtual DomError writeAnalogOut(uint8_t aout, uint16_t value);
+    virtual DomError readDigitalOut(uint8_t dout, bool& val);
+    virtual DomError readAnalogOut(uint8_t aout, uint16_t &val);
+    virtual DomError readDigitalIn(uint8_t ain, bool &val);
+    virtual DomError readAnalogIn(uint8_t ain, uint16_t &val);
 
-    // These must be redefined in derived class to describe (in human readable format) the IO lines
+    // These are the low-level versions of get*Spec() methods from DomoticIODescr
     // Result must be placed in _lastpkt+len, then len must be updated to the len of the full string
-    virtual DomError readAnalogOutSpec(uint8_t aout, int &len) {return DomError::ERR_INF_BAD; };	// Variable-len output
-    virtual DomError readAnalogInSpec(uint8_t ain, int &len) {return DomError::ERR_INF_BAD; };	// Variable-len output
-    virtual DomError readDigitalOutSpec(uint8_t aout, int &len) {return DomError::ERR_INF_BAD; };	// Variable-len output
-    virtual DomError readDigitalInSpec(uint8_t ain, int &len) {return DomError::ERR_INF_BAD; };	// Variable-len output
-// Registers are managed internally, no need to expose an API
-//    virtual DomError readRegister(uint8_t reg, int &offset, int &len) {return DomError::ERR_INF_BAD; };		// Access a plain (not array) register
-//    virtual DomError readRegister(uint8_t reg, uint8_t elem, int &offset, int &len) {return DomError::ERR_INF_BAD; };	// Access an element of an array register
+    virtual DomError readAnalogOutSpec(uint8_t aout, int &len);		// Variable-len output
+    virtual DomError readAnalogInSpec(uint8_t ain, int &len);		// Variable-len output
+    virtual DomError readDigitalOutSpec(uint8_t dout, int &len);	// Variable-len output
+    virtual DomError readDigitalInSpec(uint8_t din, int &len);		// Variable-len output
 
-    // No return: multicast packets don't send answers
-    virtual void processNotification(int node, UpdDir d, UpdType t, uint8_t num, size_t size, int offset=0) {};
-    virtual void processTimeUpdate(uint8_t epoch, uint32_t timestamp, int8_t tz, bool dst) {};
-
-    // Send an answer
+    // Send an answer to current packet (unicast)
     void answer(DomError err, size_t size, int offset=0); // Answer with 'size' bytes from _lastpkt+offset
-    // Send a notification
-    void notify(UpdDir d, UpdType t, uint8_t num, const char *txt);
+
+    // Send a notification (multicast)
+    void notify(UpdDir d, UpdType t, uint8_t num, uint16_t signKey=0xFFFF);
+    void notifyTime(uint8_t epoch, uint32_t counter, uint8_t tz, uint16_t signKey=0xFFFF);
 
     // Crypto ops
 
@@ -166,14 +185,19 @@ class Domotic
     // If fast is true, then no pk crypto is performed -- notifiee can then choose to ask for signature check after inspecting packet contents (f.e. if time skew is too big)
     void verifySig(int &offset, int len, bool fast);
 
+    // Signs 0-terminated buffer contents using keyID
+    // Modifies buff to include signature and protocol markers, shifting current content as needed
+    // Returns true in case of error (unknown keyID, buffer too small, ...)
+    bool sigBuff(char* buff, uint16_t keyID);
+
+  protected:
     // State
     int _port;
     WiFiUDP *_udp;
     bool _initialized;
     uint8_t _lastpkt[DOMOTIC_MAX_PKT_SIZE+4];	// Account for A00 and terminator in answers
     IPAddress _mcastAddr;
-    int _nodeID;
-    uint8_t _douts, _aouts, _dins, _ains, _tlen;
+    uint8_t _douts, _aouts, _dins, _ains, _tlen; // Total, for base + all detected extensions
     bool _utf;
     uint16_t *_doutMap, *_aoutMap, *_dinMap, *_ainMap, *_text;
 
@@ -183,7 +207,12 @@ class Domotic
     int _signOffset;	// if fast verification, offset of signature is saved here
 
   private:
+    static const int MAX_EXPS=8;
+    DomoNodeExpansion *_exps[MAX_EXPS];
     void handleNet();
+    // Obey the rule-of-three: Domotic must not be copied
+    Domotic(const Domotic &src) = delete;
+    Domotic &operator=(const Domotic &src) = delete;
 };
 
 #endif
