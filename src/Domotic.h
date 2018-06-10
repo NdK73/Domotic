@@ -78,11 +78,6 @@ class Domotic : public DomoticIODescr
     static uint16_t temp2net(float temp) { return 27316+(int)(temp*100); };
     static float net2temp(uint16_t temp) { return temp/100.0 - 273.16; };
 
-    // Copy from src in PROGMEM to _lastpkt+pos
-    // Returns number of copied bytes
-    int pStr2lastpkt(int pos, PGM_P src)
-      { _lastpkt[DOMOTIC_MAX_PKT_SIZE-1]=0; return strlen(strncpy_P((char*)_lastpkt+pos, src, DOMOTIC_MAX_PKT_SIZE-pos-1)); };
-
   protected:
     enum DomPktType : char {
       PKT_ANS = 'A',  // Answer packet (can *not* appear in multicast packet)
@@ -190,6 +185,16 @@ class Domotic : public DomoticIODescr
     // Returns true in case of error (unknown keyID, buffer too small, ...)
     bool sigBuff(char* buff, uint16_t keyID);
 
+    // Copy from src in PROGMEM to _lastpkt+pos
+    // Returns number of copied bytes
+    int pStr2lastpkt(int pos, PGM_P src)
+      { _lastpkt[DOMOTIC_MAX_PKT_SIZE-1]=0; return strlen(strncpy_P((char*)_lastpkt+pos, src, DOMOTIC_MAX_PKT_SIZE-pos-1)); };
+
+    // Base64 (urlsafe charset) encoding/decoding
+    // Operates in-place on data in _lastpkt -- be sure to leave enough space for encoding! (decoding cannot fail)
+    bool b64enc(int from, size_t len, int &in);	// Overwrites _lastpkt[in] and following bytes; returns true if space gets exhausted
+    bool b64dec(int &from, size_t len);		// Decodes len bytes from 'from', overwriting 'em while processing; returns true in case of error
+
   protected:
     // State
     int _port;
@@ -204,7 +209,8 @@ class Domotic : public DomoticIODescr
     // Signature handling
     bool _isSigned;	// True iff packet contains a valid signature
     uint16_t _signKey;	// keyid of signing key if _isSigned, else 0
-    int _signOffset;	// if fast verification, offset of signature is saved here
+    int _signOffset;	// offset of (decoded-to-binary) signature is saved here
+    int _signData;	// offset of signed data is saved here
 
   private:
     static const int MAX_EXPS=8;
