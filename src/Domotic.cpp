@@ -7,7 +7,7 @@
 #include "expansions/DomoNodeInout11.h"
 #include "expansions/DomoNodeInputs.h"
 
-#define PROTOVERSION "0.1.0"
+#define PROTOVERSION "0.1.1"
 
 Domotic::Domotic()
 : _port(DOMOTIC_DEF_UDP_PORT)
@@ -27,6 +27,8 @@ Domotic::Domotic()
 , _text(NULL)
 , _isSigned(false)
 , _signKey(0)
+, _signOffset(0)
+, _signData(0)
 {
   for(uint8_t addr=0; addr<Domotic::MAX_EXPS; ++addr) {
     _exps[addr]=NULL;
@@ -51,6 +53,13 @@ void Domotic::begin(void) {
 
   //Autodetect expansion boards & update in/out counter!
   Wire.begin(); // Just to be sure
+
+  // Initialize with 'local' IOs
+  _douts=douts();
+  _aouts=aouts();
+  _dins=dins();
+  _ains=ains();
+
   for(int i2c=0; i2c<Domotic::MAX_EXPS; ++i2c) {
     uint8_t error;
     uint8_t type=0, release=0;
@@ -69,6 +78,7 @@ void Domotic::begin(void) {
       Wire.write(0);
       Wire.endTransmission(false);
       Wire.requestFrom((uint8_t)(0x50+i2c), sizeof(header), (bool)true);
+#warning "TODO: test errors with 16-bit address devices and implement support"
       while(Wire.available() && cnt<sizeof(header)) {
         header[cnt++]=Wire.read();
       }
@@ -220,7 +230,8 @@ void Domotic::handleNet()
 //Serial.println(_udp->remoteIP());
 
       if(_lastpkt[offset]==PKT_ENC) {
-         err=Domotic::ERR_UNSUPP; // TODO
+#warning "Encrypted packets currently unsupported (TODO)"
+         err=Domotic::ERR_UNSUPP;
       }
       // Signature could be inside an encrypted packet
       if(_lastpkt[offset]==PKT_SIG) {
@@ -890,7 +901,7 @@ bool Domotic::sigBuff(char* buff, uint16_t keyID)
 
 void Domotic::verifySig(int &offset, int len, bool fast)
 {
-  //Serial.printf("Verify (%s)\n", fast?"FAST":"full");
+//  Serial.printf("Verify (%s) off=%d\n", fast?"FAST":"full", offset);
   uint8_t t;
   int off=offset;
 
@@ -918,7 +929,7 @@ void Domotic::verifySig(int &offset, int len, bool fast)
     // Now offset points to start of signature
   }
 
-  // @@@ TODO: locate key from signKey
+#warning "TODO: locate key from signKey"
   const uint8_t pubkey[]={
     0xd7, 0x5a, 0x98, 0x01, 0x82, 0xb1, 0x0a, 0xb7,
     0xd5, 0x4b, 0xfe, 0xd3, 0xc9, 0x64, 0x07, 0x3a,
@@ -927,46 +938,36 @@ void Domotic::verifySig(int &offset, int len, bool fast)
     };
   int sigLen=64;
 
-  uint8_t signature[sigLen];
-
-  //Serial.printf(" Given len=%d\n", len);
-  // calculate len
-  if(0==len) {
-    len=off;
-    while(_lastpkt[len])
-      ++len;
-      //Serial.printf(" Calculated len=%d\n", len);
-  }
-
-  int cnt;
-  // Replace in-place hex-encoded signature with binary one
-  for(cnt=0; cnt<sigLen && off<len; ++cnt, off+=2) {
-    if(hex2uint8(_lastpkt+off, signature+cnt)) break;
-  }
-  // Proceed only if the signature was complete
-  if(sigLen==cnt) {
-    if(fast) {
-      //Serial.println(" End of fast check: sign formally OK");
-      // Packet is not considered signed, yet, but offset must be updated and _signKey is set
-      offset=off;
-      return;
-    }
-    bool rv=Ed25519::verify(signature, pubkey, _lastpkt+off, len-off);
-    if(!rv) {
-      //Serial.println(" SIG_BAD!");
+  if(offset) { // Only for fresh verify
+    // Replace base64-encoded signature with binary one
+//    Serial.println("Decoding sig");
+    if(b64dec(off, sigLen)) {
+//      Serial.println("Error decoding b64 sig");
       _signKey=0;
       _signOffset=0;
-    } else {
-      //Serial.println(" SIG_OK");
-      offset=off;
-      _isSigned=true;
+      _signData=0;
+      return;
     }
-  } else { // Wrong sig len
-    //Serial.println(" Wrong sig len");
-    // Do not update offset, clear _signkey and _signOffset
+    _signData=off;
+  }
+
+  if(fast) {
+//    Serial.println("End of fast check: sign formally OK");
+    // Packet is not considered signed, yet, but offset must be updated and _signKey is set
+    offset=off;
+    return;
+  }
+//  Serial.printf("Performing check on %s\n", (char*)_lastpkt+_signData);
+  bool rv=Ed25519::verify(_lastpkt+_signOffset, pubkey, _lastpkt+_signData, strlen((const char *)_lastpkt+_signData));
+  if(!rv) {
+//    Serial.println(" SIG_BAD!");
     _signKey=0;
     _signOffset=0;
-    return;
+    _signData=0;
+  } else {
+//    Serial.println(" SIG_OK");
+    offset=off;
+    _isSigned=true;
   }
 }
 
@@ -1119,4 +1120,69 @@ int Domotic::hex2uint8(uint8_t *buff, uint8_t *out) {
       *out=rv;
     }
     return 2-idx;
+}
+
+static const char b64Charset[]=
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    "abcdefghijklmnopqrstuvwxyz"
+    "0123456789-_"
+    ;
+
+bool Domotic::b64enc(int from, size_t len, int &in)
+{
+#warning "TODO"
+    return true;
+}
+
+// Decode a base64-encoded string in _lastpkt+from
+// len is the expected *output* (decoded) size
+// Updates from to the char after the last parsed one
+// Returns true in case of error
+// The decoded string replaces the encoded one (decoding in-place)
+bool Domotic::b64dec(int &from, size_t len)
+{
+  if(!len) return false; // Nothing to do
+
+  size_t ol=len;	// Save requested output len
+  len=(len*4)/3;	// Calculate encoded len...
+  len+=4-(len&3);	// ... including padding
+
+  char *sig=(char *)_lastpkt+from;
+
+  // Avoid special handling for padding during decode
+  if ('='==sig[len-1]) {
+    sig[len-1]=b64Charset[0];
+  }
+  if ('='==sig[len-2]) {
+    sig[len-2]=b64Charset[0];
+  }
+
+  int pos=0;
+  for (; pos < len && ol; pos+=4) {
+    const char* v1=strchr(b64Charset, sig[pos]);
+    const char *v2=strchr(b64Charset, sig[pos+1]);
+    const char *v3=strchr(b64Charset, sig[pos+2]);
+    const char *v4=strchr(b64Charset, sig[pos+3]);
+    if(!(v1 && v2 && v3 && v4)) {
+      // Invalid char found
+      return true;
+    }
+
+    // 4 characters OK, pack in a single uint32_t
+    uint32_t blob = ((v1-b64Charset) << (6*3))+
+		    ((v2-b64Charset) << (6*2))+
+		    ((v3-b64Charset) << (6*1))+
+		    ((v4-b64Charset) << (6*0));
+
+    // Unpack the 3 bytes
+    if(ol && ol--) _lastpkt[from++]=(blob >> (8*2)) & 0xFF;
+    if(ol && ol--) _lastpkt[from++]=(blob >> (8*1)) & 0xFF;
+    if(ol && ol--) _lastpkt[from++]=(blob >> (8*0)) & 0xFF;
+  }
+
+  if(ol) return true;	// Incomplete -- how did it happen?
+
+  from=sig+pos-(char *)_lastpkt;	// Ugly math: from is the index of the char after the decoded string
+
+  return false;
 }
