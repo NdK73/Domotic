@@ -36,6 +36,9 @@ class DomoticIODescr
     virtual int setDigitalOutName(int o, const char *name) = 0;
     virtual int setAnalogInName(int i, const char *name) = 0;
     virtual int setAnalogOutName(int o, const char *name) = 0;
+
+    // Check and notify() changes in inputs
+    virtual void handler() = 0;
 };
 
 #endif

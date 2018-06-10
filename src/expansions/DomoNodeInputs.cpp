@@ -1,4 +1,5 @@
 #include "DomoNodeInputs.h"
+#include "Wire.h"
 
 // Returns an instance of the (derived) class if it can handle type/release, else NULL
 DomoNodeExpansion *DomoNodeInputs::getInstance(uint8_t typeCode, uint8_t release, uint8_t addr, void* opts)
@@ -36,3 +37,9 @@ DomoNodeInputs::DomoNodeInputs(uint8_t addr)
     : DomoNodeExpansion(addr)
 {
 }
+
+void DomoNodeInputs::handler()
+{
+#warning "TODO"
+}
+

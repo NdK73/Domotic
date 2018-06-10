@@ -36,6 +36,11 @@ class DomoNodeExpansion : public DomoticIODescr {
         virtual int setAnalogInName(int i, const char *name) { return 0; };
         virtual int setAnalogOutName(int o, const char *name) { return 0; };
 
+        // Return the extension "unique" ID
+        virtual uint32_t getID() = 0;
+
+        virtual void handler() = 0;
+
     protected:
         uint8_t _addr;
         // Can be constructed only via getInstance()

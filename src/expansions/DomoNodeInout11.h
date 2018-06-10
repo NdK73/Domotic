@@ -37,6 +37,9 @@ class DomoNodeInout11 : public DomoNodeExpansion {
         virtual int setAnalogOutName(int o, const char *name) { return 0; };
         virtual int setDigitalOutName(int o, const char *name);
 
+        virtual uint32_t getID() { return 0x10110000+_addr; };
+        virtual void handler();
+
     protected:
         // Can be constructed only via getInstance()
         DomoNodeInout11(uint8_t addr);

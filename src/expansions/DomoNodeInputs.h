@@ -37,6 +37,9 @@ class DomoNodeInputs : public DomoNodeExpansion {
         virtual int setAnalogInName(int i, const char *name) { return 0; };
         virtual int setAnalogOutName(int o, const char *name) { return 0; };
 
+        virtual uint32_t getID() { return 0x10120000+_addr; };
+        virtual void handler();
+
     protected:
         // Can be constructed only via getInstance()
         DomoNodeInputs(uint8_t addr);

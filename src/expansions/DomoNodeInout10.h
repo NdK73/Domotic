@@ -38,6 +38,9 @@ class DomoNodeInout10 : public DomoNodeExpansion {
         virtual int setDigitalInName(int i, const char *name) { return 0; };
         virtual int setAnalogOutName(int o, const char *name) { return 0; };
         virtual int setDigitalOutName(int o, const char *name) { return 0; };
+        // Fake ID: 0x1010000x x=address (0-7)
+        virtual uint32_t getID() { return 0x10100000+_addr; };
+        virtual void handler();
 
     protected:
         // Can be constructed only via getInstance()

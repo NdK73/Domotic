@@ -57,3 +57,8 @@ DomoNodeInout10::DomoNodeInout10(uint8_t addr)
     : DomoNodeExpansion(addr)
 {
 }
+
+void DomoNodeInout10::handler()
+{
+#warning "TODO"
+}
