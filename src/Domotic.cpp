@@ -150,7 +150,7 @@ void Domotic::handleNet()
       if(data-offset>=10 && _lastpkt[offset]=='U') {	// Regular update
         Domotic::UpdDir d;
         Domotic::UpdType t;
-        uint16_t group=0;
+        uint16_t group=0, val;
         uint8_t b;
         offset=1;
 
@@ -172,6 +172,7 @@ void Domotic::handleNet()
           t=Domotic::TYPE_DIGITAL;
         } else
           return;
+        ++offset;
 
         // Group
         if(hex2uint8(_lastpkt+offset, &b)) return;
@@ -181,15 +182,22 @@ void Domotic::handleNet()
         group=(group<<8)+b;
         offset+=2;
 
-        if(Domotic::TYPE_DIGITAL) {
-          if('1'==_lastpkt[offset]) b=1;
-          else if('0'==_lastpkt[offset]) b=0;
+        if(Domotic::TYPE_DIGITAL==t) {
+          // Digital: only '1' or '0'
+          if('1'==_lastpkt[offset]) val=1;
+          else if('0'==_lastpkt[offset]) val=0;
           else return;
         } else {
-          b=0;
+          // Analog: 4 hex bytes
+          if(hex2uint8(_lastpkt+offset, &b)) return;
+          val=b;
+          offset+=2;
+          if(hex2uint8(_lastpkt+offset, &b)) return;
+          val=(val<<8)+b;
+          offset+=2;
         }
         // Packet parsed OK, run callback
-        processNotification(d, t, group, b, data-offset, offset);
+        processNotification(d, t, group, val, data-offset, offset);
       } else if(_lastpkt[offset]=='T' && data-offset>=12) { // Time update (usually signed)
         ++offset; // Skip 'T'
         uint8_t epoch;
@@ -1128,7 +1136,7 @@ static const char b64Charset[]=
     "0123456789-_"
     ;
 
-bool Domotic::b64enc(int from, size_t len, int &in)
+bool Domotic::b64enc(int &from, size_t len)
 {
 #warning "TODO"
     return true;

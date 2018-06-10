@@ -133,7 +133,7 @@ class Domotic : public DomoticIODescr
     virtual void handler() {}; // Called by handle() to process application-specific logic in derived class and notify changes
 
     // No return: multicast packets don't send answers
-    virtual void processNotification(UpdDir d, UpdType t, int group, uint8_t val, size_t size, int offset=0) {};
+    virtual void processNotification(UpdDir d, UpdType t, int group, uint16_t val, size_t size, int offset=0) {};
     virtual void processTimeUpdate(uint8_t epoch, uint32_t timestamp, int8_t tz, bool dst) {};
 
     // Probably the following methods will never need overrides
@@ -191,9 +191,9 @@ class Domotic : public DomoticIODescr
       { _lastpkt[DOMOTIC_MAX_PKT_SIZE-1]=0; return strlen(strncpy_P((char*)_lastpkt+pos, src, DOMOTIC_MAX_PKT_SIZE-pos-1)); };
 
     // Base64 (urlsafe charset) encoding/decoding
-    // Operates in-place on data in _lastpkt -- be sure to leave enough space for encoding! (decoding cannot fail)
-    bool b64enc(int from, size_t len, int &in);	// Overwrites _lastpkt[in] and following bytes; returns true if space gets exhausted
-    bool b64dec(int &from, size_t len);		// Decodes len bytes from 'from', overwriting 'em while processing; returns true in case of error
+    // Operates in-place on data in _lastpkt -- be sure to leave enough space for encoding!
+    bool b64enc(int &from, size_t len);	// Overwrites _lastpkt[from] and following bytes; returns true if space gets exhausted; if 0==from, updates it with the space needed to encode len bytes
+    bool b64dec(int &from, size_t len);	// Decodes len bytes from 'from', overwriting 'em while processing; returns true in case of error
 
   protected:
     // State
