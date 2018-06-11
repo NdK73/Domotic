@@ -1136,10 +1136,63 @@ static const char b64Charset[]=
     "0123456789-_"
     ;
 
+// Base64-encode a binary buffer at _lastpkt[from].._lastpkt[from+len-1] in-place
+// Call with -1==from to get the encoded len in 'from'
+// returns true if encoding would overflow _lastpkt
 bool Domotic::b64enc(int &from, size_t len)
 {
-#warning "TODO"
+  int ol=0;
+  if(len) {
+    ol=(len*4+2)/3;
+    ol+=4-ol&3;	// Include padding
+  }
+
+  if(-1==from) {
+    // Only return needed space
+    from=ol;
     return true;
+  }
+
+  if(!len) return false;
+
+  if(from+ol>DOMOTIC_MAX_PKT_SIZE) return true;	// Overflow
+
+  int start=from;
+  from=ol; // update parameter as return value
+
+  // Work backwards
+  if(len%3) { // Needs padding
+    uint8_t pad=3-len%3; // 1 or 2 padding chars
+    uint8_t a=_lastpkt[start+len-len%3+0];
+    uint8_t b=(1==pad)?_lastpkt[start+len-len%3+1]:0;
+    // 'c' is always 0, or padding would not be needed.
+    uint32_t blob=a;
+    blob=(blob<<8) + b;
+    blob=(blob<<8) + 0;
+    ol-=4;
+    _lastpkt[start+ol+0]=b64Charset[(blob>>(6*3))&0x3f];
+    _lastpkt[start+ol+1]=b64Charset[(blob>>(6*2))&0x3f];
+    _lastpkt[start+ol+2]=(1==pad)?b64Charset[(blob>>(6*1))&0x3f]:'=';
+    _lastpkt[start+ol+3]='=';
+    len-=len%3; // Already processed not-multiple-of-3 final bytes
+  }
+
+  if(!ol) return false; // Done
+
+  for(int chunk=len/3-1; ol>0; --chunk) {
+    uint8_t a=_lastpkt[start+3*chunk+0];
+    uint8_t b=_lastpkt[start+3*chunk+1];
+    uint8_t c=_lastpkt[start+3*chunk+2];
+    uint32_t blob=a;
+    blob=(blob<<8) + b;
+    blob=(blob<<8) + c;
+    ol-=4;
+    _lastpkt[start+ol+0]=b64Charset[(blob>>(6*3))&0x3f];
+    _lastpkt[start+ol+1]=b64Charset[(blob>>(6*2))&0x3f];
+    _lastpkt[start+ol+2]=b64Charset[(blob>>(6*1))&0x3f];
+    _lastpkt[start+ol+3]=b64Charset[(blob>>(6*0))&0x3f];
+  }
+  return true;
 }
 
 // Decode a base64-encoded string in _lastpkt+from
