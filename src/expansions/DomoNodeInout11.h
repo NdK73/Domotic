@@ -3,7 +3,7 @@
 class DomoNodeInout11 : public DomoNodeExpansion {
     public:
         // Returns an instance of the (derived) class if it can handle type/release, else NULL
-        static DomoNodeExpansion *getInstance(uint8_t type, uint8_t release, uint8_t addr, void* opts);
+        static DomoNodeExpansion *getInstance(const uint8_t header[], uint8_t addr, void* opts);
 
         // Counters
         virtual int ains() { return 0; };

@@ -1,9 +1,9 @@
 #include "DomoNodeInout11.h"
 
 // Returns an instance of the (derived) class if it can handle type/release, else NULL
-DomoNodeExpansion *DomoNodeInout11::getInstance(uint8_t type, uint8_t release, uint8_t addr, void* opts)
+DomoNodeExpansion *DomoNodeInout11::getInstance(const uint8_t header[], uint8_t addr, void* opts)
 {
-  if(1==type && 1==release)
+  if(1==header[2] && 1==header[3])
     return new DomoNodeInout11(addr);
   return NULL;
 }

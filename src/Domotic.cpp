@@ -29,7 +29,7 @@ Domotic::Domotic()
 , _signKey(0)
 , _signOffset(0)
 , _signData(0)
-, doNotScan(false)
+, _doNotScan(false)
 {
   for(uint8_t addr=0; addr<Domotic::MAX_EXPS; ++addr) {
     _exps[addr]=NULL;
@@ -66,7 +66,7 @@ void Domotic::begin(void) {
   _ains=ains();
 
   if(false==_doNotScan) {
-    for(int i2c=0; i2c<Domotic::MAX_EXPS; ++i2c) {
+    for(uint8_t i2c=0; i2c<Domotic::MAX_EXPS; ++i2c) {
       uint8_t error;
       uint8_t type=0, release=0;
 
@@ -75,27 +75,76 @@ void Domotic::begin(void) {
         // PCA9555 is at 0x20-0x27
         Wire.beginTransmission(0x20+i2c);
         if(!Wire.endTransmission()) { // Found PCA9555 in DomoNode-inout 1.0 (no EEPROM)
-          _exps[i2c]=DomoNodeInout10::getInstance(1, 0, i2c, NULL);
+          _exps[i2c]=DomoNodeInout10::getInstance(NULL, i2c, NULL);
         }
       } else {
-        uint8_t header[4], cnt=0;
+        uint8_t header[Domotic::EXPANSION_HDRSIZE], retry[Domotic::EXPANSION_HDRSIZE], cnt=0;
         // EEPROM found, get board type and release
+//        Serial.println("Detect: first read");
         Wire.beginTransmission(0x50+i2c);
         Wire.write(0);
         Wire.endTransmission(false);
-        Wire.requestFrom((uint8_t)(0x50+i2c), sizeof(header), (bool)true);
-#warning "TODO: test errors with 16-bit address devices and implement support"
+        Wire.requestFrom(static_cast<uint8_t>(0x50+i2c), static_cast<size_t>(sizeof(header)), static_cast<bool>(false));
+        cnt=0;
         while(Wire.available() && cnt<sizeof(header)) {
           header[cnt++]=Wire.read();
+//          Serial.print(header[cnt-1], HEX);
+//          Serial.print(" ");
         }
-        // A proper factory pattern would only waste precious RAM
-        // Every class "knows" its keys
-        _exps[i2c]=DomoNodeInout11::getInstance(header[0], header[1], i2c, NULL);
-        if(!_exps[i2c])
-          _exps[i2c]=DomoNodeInputs::getInstance(header[0], header[1], i2c, NULL);
-        // just "cascade" other expansions: the first matching one will be saved
-        //if(!_exps[i2c])
-        //  _exps[i2c]=DomoNodeInputs::getInstance(header[0], header[1], i2c, NULL);
+
+//        Serial.println("");
+        Wire.endTransmission(true);
+
+//        Serial.println("Detect: second read");
+        Wire.beginTransmission(0x50+i2c);
+        Wire.write(0);
+        Wire.endTransmission(false);
+        Wire.requestFrom(static_cast<uint8_t>(0x50+i2c), static_cast<size_t>(sizeof(retry)), static_cast<bool>(false));
+        cnt=0;
+        while(Wire.available() && cnt<sizeof(retry)) {
+          retry[cnt++]=Wire.read();
+//          Serial.print(retry[cnt-1], HEX);
+//          Serial.print(" ");
+        }
+//        Serial.println("");
+        Wire.endTransmission(true);
+
+        if(!memcmp(header, retry, sizeof(header)) &&
+           Domotic::EXPANSION_MARKER==(header[0]<<8+header[1])) {
+//          Serial.println("8-bit address");
+        } else {
+//          Serial.println("Probably 16-bit address");
+          Wire.beginTransmission(0x50+i2c);
+          Wire.write(0); // 16-bit address
+          Wire.write(0); // Would overwrite address 0 on 8-bit addressed device
+          Wire.endTransmission(false);
+          Wire.requestFrom(static_cast<uint8_t>(0x50+i2c), static_cast<size_t>(sizeof(header)), static_cast<bool>(false));
+          cnt=0;
+          while(Wire.available() && cnt<sizeof(header)) {
+            header[cnt++]=Wire.read();
+//            Serial.print(header[cnt-1], HEX);
+//            Serial.print(" ");
+          }
+//          Serial.println("");
+          Wire.endTransmission(true);
+//          if(Domotic::EXPANSION_MARKER==(header[0]<<8+header[1])) {
+//            Serial.println("16-bit address confirmed");
+//          } else {
+//            Serial.println("Uninitialized device?");
+//          }
+        }
+
+        // Magic number is present only in expansion boards
+        if(Domotic::EXPANSION_MARKER==(header[0]<<8+header[1])) {
+          // A proper factory pattern would only waste precious RAM
+          // Every class "knows" its keys
+          _exps[i2c]=DomoNodeInout11::getInstance(header, i2c, NULL);
+          if(!_exps[i2c])
+            _exps[i2c]=DomoNodeInputs::getInstance(header, i2c, NULL);
+          // just "cascade" other expansions: the first matching one will be saved
+          //if(!_exps[i2c])
+          //  _exps[i2c]=DomoNodeInputs::getInstance(header, i2c, NULL);
+        }
       }
       if(_exps[i2c]) {
         _douts+=_exps[i2c]->douts();

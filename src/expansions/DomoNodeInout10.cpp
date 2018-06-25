@@ -3,7 +3,7 @@
 // DomoNode-Inout 1.0 had no EEPROM to store config, so values are hardcoded
 
 // Returns an instance of the (derived) class if it can handle type/release, else NULL
-DomoNodeExpansion *DomoNodeInout10::getInstance(uint8_t type, uint8_t release, uint8_t addr, void* opts)
+DomoNodeExpansion *DomoNodeInout10::getInstance(const uint8_t header[], uint8_t addr, void* opts)
 {
     // Caller already checked PCA9555 presence (and absence of EEPROM)
     return new DomoNodeInout10(addr);

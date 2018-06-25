@@ -2,9 +2,9 @@
 #include "Wire.h"
 
 // Returns an instance of the (derived) class if it can handle type/release, else NULL
-DomoNodeExpansion *DomoNodeInputs::getInstance(uint8_t typeCode, uint8_t release, uint8_t addr, void* opts)
+DomoNodeExpansion *DomoNodeInputs::getInstance(const uint8_t header[], uint8_t addr, void* opts)
 {
-  if(2==typeCode)
+  if(2==header[2])
     return new DomoNodeInputs(addr);
   return NULL;
 }

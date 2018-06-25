@@ -216,6 +216,8 @@ class Domotic : public DomoticIODescr
 
   private:
     static const int MAX_EXPS=8;
+    static const int EXPANSION_MARKER=0xD74A;
+    static const int EXPANSION_HDRSIZE=16;
     bool _doNotScan;	// Set by disableScan()
     DomoNodeExpansion *_exps[MAX_EXPS];
     void handleNet();
