@@ -60,6 +60,8 @@ class Domotic : public DomoticIODescr
 
     Domotic();
     ~Domotic();
+
+    void disableScan(); // Do *not* scan I2C bus for expansions (default is to scan)
     void begin();
     void handle();
 
@@ -214,6 +216,7 @@ class Domotic : public DomoticIODescr
 
   private:
     static const int MAX_EXPS=8;
+    bool _doNotScan;	// Set by disableScan()
     DomoNodeExpansion *_exps[MAX_EXPS];
     void handleNet();
     // Obey the rule-of-three: Domotic must not be copied
