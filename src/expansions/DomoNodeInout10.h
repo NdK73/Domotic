@@ -14,9 +14,9 @@ class DomoNodeInout10 : public DomoNodeExpansion {
 
         // Getters
         virtual int ain(int io) { return 0; };
-        virtual bool din(int io);
+        virtual bool din(int io) { if(0<=io && io<3) return (_state&(1<<(5+io))); return true; };
         virtual int aout(int io) { return 0; };
-        virtual bool dout(int io);
+        virtual bool dout(int io) { if(0<=io && io<4) return (_state&(1<<io)); return true; };
         // Setters
         virtual int aout(int io, int val) { return 0; };
         virtual bool dout(int io, bool val);
@@ -45,4 +45,7 @@ class DomoNodeInout10 : public DomoNodeExpansion {
     protected:
         // Can be constructed only via getInstance()
         DomoNodeInout10(uint8_t addr);
+
+    private:
+        uint16_t _state;
 };

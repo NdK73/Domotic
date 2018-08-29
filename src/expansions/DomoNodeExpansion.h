@@ -41,6 +41,8 @@ class DomoNodeExpansion : public DomoticIODescr {
 
         virtual void handler() = 0;
 
+        const uint8_t HEADER_SIZE=16; // Size of reserved bytes in EEPROM
+
     protected:
         uint8_t _addr;
         // Can be constructed only via getInstance()

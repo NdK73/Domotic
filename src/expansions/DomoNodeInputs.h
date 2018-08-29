@@ -13,7 +13,12 @@ class DomoNodeInputs : public DomoNodeExpansion {
 
         // Getters
         virtual int ain(int io) { return 0; };
-        virtual bool din(int io);
+        virtual bool din(int io) {
+            if(0<=io && io<16)
+                return _state & (1<<io);
+            else
+                return true;
+        };
         virtual int aout(int io) { return 0; };
         virtual bool dout(int io) { return 0; };
         // Setters
@@ -40,10 +45,12 @@ class DomoNodeInputs : public DomoNodeExpansion {
         virtual uint32_t getID() { return 0x10120000+_addr; };
         virtual void handler();
 
+        const uint8_t MAX_NAME_LEN=15;
+
     protected:
         // Can be constructed only via getInstance()
         DomoNodeInputs(uint8_t addr);
 
     private:
-        int _addr;
+        uint16_t _state;
 };

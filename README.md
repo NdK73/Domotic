@@ -13,3 +13,7 @@ _tlen and _utf must be initialized as appropriate. The actual values will automa
 Declare (in global scope)
 DerivedClass myInstance;
 instead of the (wrong) "Derivedclass myInstance = DerivedClass();" .
+
+Note that expansions state is only updated in handler() method both for inputs and outputs. So, f.e. you can't just poll a din() to check it for a change.
+
+Also note that digital state for 'active' is board- and line-dependant -- but usually all my boards use 'active low' logic.
