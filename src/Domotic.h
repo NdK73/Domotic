@@ -1,6 +1,3 @@
-#ifndef __DOMOTIC_H
-#define __DOMOTIC_H
-
 /********************************
  * Base class for domotic protocol handling
  *
@@ -19,6 +16,9 @@
  *   - send IR2tnn to read its mapping
  *   - send IItdnn to read its name (t={A|D},d={I|O})
  */
+
+#pragma once
+
 #include <ESP8266WiFi.h>
 #include <WiFiUdp.h>
 
@@ -112,24 +112,24 @@ class Domotic : public DomoticIODescr
 
     // This block should always be overridden (at least partially)
     // DomoticIODescr interface
-    virtual int ains() { return 0; };
-    virtual int dins() { return 0; };
-    virtual int aouts() { return 0; };
-    virtual int douts() { return 0; };
-    virtual int ain(int i) { return 0; };
-    virtual bool din(int i) { return false; };
-    virtual int aout(int o) { return 0; };
-    virtual bool dout(int o) { return false; };
-    virtual int aout(int o, int val) { return 0; };
-    virtual bool dout(int o, bool val) { return false; };
-    virtual int getAnalogInSpec(int i, char* buff, int maxlen) { return 0; };  // Returns number of characters written
-    virtual int getAnalogOutSpec(int o, char* buff, int maxlen) { return 0; }; // Returns number of characters written
-    virtual int getDigitalInName(int i, char* buff, int maxlen) { return 0; }; // Returns number of characters written
-    virtual int getDigitalOutName(int o, char* buff, int maxlen) { return 0; };// Returns number of characters written
-    virtual int setDigitalInName(int i, const char *name) { return 0; };       // Returns number of characters written
-    virtual int setDigitalOutName(int o, const char *name) { return 0; };      // Returns number of characters written
-    virtual int setAnalogInName(int i, const char *name) { return 0; };        // Returns number of characters written
-    virtual int setAnalogOutName(int o, const char *name) { return 0; };       // Returns number of characters written
+    virtual int ains() override { return 0; };
+    virtual int dins() override { return 0; };
+    virtual int aouts() override { return 0; };
+    virtual int douts() override { return 0; };
+    virtual int ain(int i) override { return 0; };
+    virtual bool din(int i) override { return false; };
+    virtual int aout(int o) override { return 0; };
+    virtual bool dout(int o) override { return false; };
+    virtual int aout(int o, int val) override { return 0; };
+    virtual bool dout(int o, bool val) override { return false; };
+    virtual int getAnalogInSpec(int i, char* buff, int maxlen) override { return 0; };  // Returns number of characters written
+    virtual int getAnalogOutSpec(int o, char* buff, int maxlen) override { return 0; }; // Returns number of characters written
+    virtual int getDigitalInName(int i, char* buff, int maxlen) override { return 0; }; // Returns number of characters written
+    virtual int getDigitalOutName(int o, char* buff, int maxlen) override { return 0; };// Returns number of characters written
+    virtual int setDigitalInName(int i, const char *name) override { return 0; };       // Returns number of characters written
+    virtual int setDigitalOutName(int o, const char *name) override { return 0; };      // Returns number of characters written
+    virtual int setAnalogInName(int i, const char *name) override { return 0; };        // Returns number of characters written
+    virtual int setAnalogOutName(int o, const char *name) override { return 0; };       // Returns number of characters written
 
     virtual void initMaps() {}; // Called by begin() to initialize IO mapping data (arrays are already allocated and initialized to 0)
     virtual void handler() {}; // Called by handle() to process application-specific logic in derived class and notify changes
@@ -225,5 +225,3 @@ class Domotic : public DomoticIODescr
     Domotic(const Domotic &src) = delete;
     Domotic &operator=(const Domotic &src) = delete;
 };
-
-#endif

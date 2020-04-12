@@ -49,7 +49,7 @@ class DomoNodeInputs : public DomoNodeExpansion {
 
     protected:
         // Can be constructed only via getInstance()
-        DomoNodeInputs(uint8_t addr);
+        explicit DomoNodeInputs(uint8_t addr);
 
     private:
         uint16_t _state;

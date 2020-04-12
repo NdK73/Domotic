@@ -1,7 +1,6 @@
-#if !defined _DOMOTICIODESCR
-#define _DOMOTICIODESCR
-
 // Interface methods used by Domotic and DomoNodeExpansion classes.
+#pragma once
+
 class DomoticIODescr
 {
   public:
@@ -40,5 +39,3 @@ class DomoticIODescr
     // Check and notify() changes in inputs
     virtual void handler() = 0;
 };
-
-#endif

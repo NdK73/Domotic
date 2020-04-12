@@ -34,16 +34,16 @@ public:
     virtual ~SHA512();
 
     size_t hashSize() const;
-    size_t blockSize() const;
+    size_t blockSize() const override;
 
-    void reset();
-    void update(const void *data, size_t len);
-    void finalize(void *hash, size_t len);
+    void reset() override;
+    void update(const void *data, size_t len) override;
+    void finalize(void *hash, size_t len) override;
 
-    void clear();
+    void clear() override;
 
-    void resetHMAC(const void *key, size_t keyLen);
-    void finalizeHMAC(const void *key, size_t keyLen, void *hash, size_t hashLen);
+    void resetHMAC(const void *key, size_t keyLen) override;
+    void finalizeHMAC(const void *key, size_t keyLen, void *hash, size_t hashLen) override;
 
 private:
     struct {

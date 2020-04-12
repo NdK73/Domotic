@@ -5,8 +5,7 @@
  * Some ideas mediated from NaCl https://nacl.cr.yp.to/
  * TODO: check https://github.com/jedisct1/libhydrogen
 */
-#ifndef _DOMOTICCRYPTO_H
-#define _DOMOTICCRYPTO_H
+#pragma once
 
 #include <stddef.h>
 #include <stdint.h>
@@ -79,5 +78,3 @@ class Ed25519VerifyOnly: public Key
 */
 
 extern RNGClass RNG;
-
-#endif

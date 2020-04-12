@@ -67,8 +67,6 @@ void Domotic::begin(void) {
 
   if(false==_doNotScan) {
     for(uint8_t i2c=0; i2c<Domotic::MAX_EXPS; ++i2c) {
-      uint8_t error;
-      uint8_t type=0, release=0;
 
       Wire.beginTransmission(0x50+i2c);
       if(Wire.endTransmission()) {	// EEPROM not found
@@ -110,7 +108,7 @@ void Domotic::begin(void) {
         Wire.endTransmission(true);
 
         if(!memcmp(header, retry, sizeof(header)) &&
-           Domotic::EXPANSION_MARKER==(header[0]<<8+header[1])) {
+           Domotic::EXPANSION_MARKER==((header[0]<<8)+header[1])) {
 //          Serial.println("8-bit address");
         } else {
 //          Serial.println("Probably 16-bit address");
@@ -135,7 +133,7 @@ void Domotic::begin(void) {
         }
 
         // Magic number is present only in expansion boards
-        if(Domotic::EXPANSION_MARKER==(header[0]<<8+header[1])) {
+        if(Domotic::EXPANSION_MARKER==((header[0]<<8)+header[1])) {
           // A proper factory pattern would only waste precious RAM
           // Every class "knows" its keys
           _exps[i2c]=DomoNodeInout11::getInstance(header, i2c, NULL);
@@ -281,7 +279,7 @@ void Domotic::handleNet()
         offset+=2;
 
         if(2<hex2uint8(_lastpkt+offset, &b)) return;
-        tz=b&0x1F | ((b&0x10)?0xF0:0); // theoretically from -16 to +15, actually from -12 to +12
+        tz=(b&0x1F) | ((b&0x10)?0xF0:0); // theoretically from -16 to +15, actually from -12 to +12
         dst=b&0x20;
         offset+=2;
 
@@ -1200,7 +1198,7 @@ bool Domotic::b64enc(int &from, size_t len)
   int ol=0;
   if(len) {
     ol=(len*4+2)/3;
-    ol+=4-ol&3;	// Include padding
+    ol+=4-(ol&3);	// Include padding
   }
 
   if(-1==from) {
@@ -1274,8 +1272,8 @@ bool Domotic::b64dec(int &from, size_t len)
     sig[len-2]=b64Charset[0];
   }
 
-  int pos=0;
-  for (; pos < len && ol; pos+=4) {
+  unsigned int pos=0;
+  for (; (pos < len) && ol; pos+=4) {
     const char* v1=strchr(b64Charset, sig[pos]);
     const char *v2=strchr(b64Charset, sig[pos+1]);
     const char *v3=strchr(b64Charset, sig[pos+2]);

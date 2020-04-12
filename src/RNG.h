@@ -1,10 +1,9 @@
-#ifndef _CRYPTORNG_H
-#define _CRYPTORNG_H
+// Replaces the one in arduinolibs, uses the TRNG in ESP8266
+#pragma once
 
 #include <stddef.h>
 #include <stdint.h>
 
-// Replaces the one in arduinolibs, uses the TRNG in ESP8266
 class RNGClass {
   public:
     static void rand(uint8_t *data, size_t len) {
@@ -15,5 +14,3 @@ class RNGClass {
 };
 
 extern RNGClass RNG;
-
-#endif

@@ -42,7 +42,7 @@ class DomoNodeInout11 : public DomoNodeExpansion {
 
     protected:
         // Can be constructed only via getInstance()
-        DomoNodeInout11(uint8_t addr);
+        explicit DomoNodeInout11(uint8_t addr);
 
     private:
         int _addr, _ins, _outs;
